@@ -1,0 +1,56 @@
+name: 'LuaRocks Publish'
+description: 'Publish to LuaRocks using GitHub Actions'
+author: 'Munif Tanjim'
+branding:
+  color: 'blue'
+  icon: 'moon'
+inputs:
+  lua_version:
+    description: 'Lua version.'
+    required: true
+  luajit_verison:
+    description: 'LuaJIT version.'
+    required: false
+    default: ''
+  luarocks_version:
+    description: 'LuaRocks version.'
+    required: true
+  name:
+    description: 'Package name.'
+    required: false
+    default: ''
+  version:
+    description: 'Version to publish.'
+    required: false
+    default: ''
+  api_key:
+    description: 'LuaRocks API Key.'
+    required: true
+  force:
+    description: 'Force publish.'
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Luver
+      uses: MunifTanjim/luver-action@v1
+      with:
+        default: ${{ inputs.lua_version }}
+        lua_versions: ${{ inputs.lua_version }}
+        luajit_versions: ${{ inputs.luajit_version && format('{0}:{1}', inputs.lua_version, inputs.luajit_version) || '' }}
+        luarocks_versions: ${{ inputs.lua_version }}:${{ inputs.luarocks_version }}
+    - name: Install luarocks dependencies 
+      shell: bash
+      run: |
+        luarocks install lua-cjson
+    - name: Publish to LuaRocks
+      shell: bash
+      run: |
+        npx zx ${{ github.action_path }}/scripts/publish
+      env:
+        GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_FORCE: ${{ inputs.force }}
+        LUAROCKS_API_KEY: ${{ inputs.api_key }}

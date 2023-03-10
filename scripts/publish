@@ -1,0 +1,241 @@
+#!/usr/bin/env zx
+
+$.verbose = true;
+
+function get_rockspec(filename) {
+  if (!fs.existsSync(filename)) {
+    echo(`missing rockspec: ${filename}`);
+    process.exit(1);
+  }
+
+  const lines = fs.readFileSync(filename, { encoding: "utf8" }).split("\n");
+
+  const rockspec = {
+    filename,
+    lines,
+    copy(filename) {
+      fs.writeFileSync(filename, this.lines.join("\n"));
+      return get_rockspec(filename);
+    },
+    save() {
+      fs.writeFileSync(this.filename, this.lines.join("\n"));
+    },
+    get package() {
+      const line = this.lines.find((line) =>
+        /^package *= *(?<quote>['"]).+\k<quote>/.test(line)
+      );
+      const match = line?.match(/= *(?<quote>['"])(?<package>.+)\k<quote>/);
+      return match?.groups.package ?? null;
+    },
+    get version_line_index() {
+      const index = this.lines.findIndex((line) =>
+        /^version *= *(?<quote>['"]).+\k<quote>/.test(line)
+      );
+      if (index === -1) {
+        throw new Error("failed to extract rockspec version line");
+      }
+
+      return index;
+    },
+    get version() {
+      const line = this.lines[this.version_line_index];
+
+      const match = line.match(/= *(?<quote>['"])(?<version>.+)\k<quote>/);
+      if (!match) {
+        throw new Error("failed to extract rockspec version");
+      }
+
+      return match.groups.version;
+    },
+    set version(version) {
+      const line = this.lines[this.version_line_index];
+      this.lines[this.version_line_index] = line.replace(this.version, version);
+    },
+    get source_tag_line_index() {
+      const index = this.lines.findIndex((line) =>
+        /^ *tag *= *(?:nil|(?<quote>['"]).+\k<quote>)/.test(line)
+      );
+      if (index === -1) {
+        throw new Error("failed to extract rockspec source.tag line");
+      }
+
+      return index;
+    },
+    get source_tag() {
+      const line = this.lines[this.source_tag_line_index];
+
+      const match = line.match(
+        /= *(?:(?<nil>nil)|(?:(?<quote>['"])(?<tag>.+)\k<quote>))(?:,|$)/
+      );
+      if (!match) {
+        throw new Error("failed to extract rockspec source.tag");
+      }
+
+      return match.groups.nil ? null : match.groups.tag;
+    },
+    set source_tag(tag) {
+      const current_source_tag = this.source_tag;
+      const line = this.lines[this.source_tag_line_index];
+      this.lines[this.source_tag_line_index] =
+        current_source_tag === null
+          ? line.replace("nil", `"${tag}"`)
+          : line.replace(current_source_tag, `"${tag}"`);
+    },
+  };
+
+  return rockspec;
+}
+
+function validate_repo_rockspec(rockspec) {
+  if (rockspec.package !== package_name) {
+    echo(`invalid rockspec, expected: package = '${package_name}'`);
+    process.exit(1);
+  }
+
+  if (rockspec.version !== "dev") {
+    echo("invalid rockspec, missing: version = 'dev'");
+    process.exit(1);
+  }
+
+  if (rockspec.source_tag !== null) {
+    echo("invalid rockspec, missing: tag = nil");
+    process.exit(1);
+  }
+}
+
+async function get_git_tag(version, rockspec_version) {
+  const expected_tags = [
+    rockspec_version,
+    `v${rockspec_version}`,
+    version,
+    `v${version}`,
+  ];
+
+  let tag = null;
+  let max_fetch_depth = 500;
+  let fetch_depth = 1;
+
+  while (!tag) {
+    await $`git fetch --depth=${fetch_depth} --tags`
+
+    const { stdout } = await $`git tag -l ${expected_tags}`;
+
+    tag = stdout.split("\n")[0] || null;
+
+    if (fetch_depth > max_fetch_depth) {
+      break
+    }
+
+    fetch_depth = fetch_depth * 2;
+  }
+
+  return tag;
+}
+
+async function git_rev_parse_commit(rev) {
+  const { stdout } = await $`git rev-parse ${rev}^{commit}`;
+  return stdout;
+}
+
+async function is_git_tag_checked_out(git_tag) {
+  return await Promise.all([
+    git_rev_parse_commit("HEAD"),
+    git_rev_parse_commit(git_tag),
+  ]).then(([head_commit, tag_commit]) => head_commit === tag_commit);
+}
+
+async function prepare_version() {
+  const default_branch = $.env.GIT_DEFAULT_BRANCH;
+
+  let version = $.env.INPUT_VERSION;
+
+  if (!version) {
+    version = $.env.GITHUB_REF_NAME;
+  }
+
+  if (version === default_branch) {
+    version = "dev";
+  }
+
+  if (version !== "dev") {
+    version = version.replace("^v", "");
+  }
+
+  if (version === "dev" && $.env.GITHUB_REF_NAME !== default_branch) {
+    echo(
+      `unexpected $GITHUB_REF_NAME: ${$.env.GITHUB_REF_NAME}, expected '${default_branch}'`
+    );
+    process.exit(1);
+  }
+
+  let rockspec_version = `${version}`;
+  if (/.+-.+/.test(version)) {
+    version = version.replace(/-.+/, "");
+  } else {
+    rockspec_version = `${rockspec_version}-1`;
+  }
+
+  let git_tag = null;
+
+  if (version !== "dev") {
+    git_tag = await get_git_tag(version, rockspec_version);
+    if (!git_tag) {
+      echo(
+        `missing git tag for version(${version}) rockspec_version(${rockspec_version})`
+      );
+      process.exit(1);
+    }
+  }
+
+  return { version, rockspec_version, git_tag };
+}
+
+let package_name = $.env.INPUT_NAME;
+if (!package_name) {
+  package_name = $.env.GITHUB_REPOSITORY.replace(/.*\//, "");
+}
+
+const repo_rockspec = get_rockspec(`${package_name}.rockspec`);
+
+validate_repo_rockspec(repo_rockspec);
+
+const { version, rockspec_version, git_tag } = await prepare_version();
+
+if (
+  version !== "dev" &&
+  $.env.GITHUB_REF_TYPE !== "tag" &&
+  !(await is_git_tag_checked_out(git_tag))
+) {
+  await $`git checkout ${git_tag}`;
+}
+
+const rockspec = repo_rockspec.copy(
+  `${package_name}-${rockspec_version}.rockspec`
+);
+
+rockspec.version = rockspec_version;
+if (version !== "dev") {
+  rockspec.source_tag = git_tag;
+}
+
+rockspec.save();
+
+echo(
+  [
+    "",
+    `--[[ START: ${rockspec.filename} ]]`,
+    "",
+    ...rockspec.lines,
+    "",
+    `--[[   END: ${rockspec.filename} ]]`,
+  ].join("\n")
+);
+
+const luarocks_upload_flags = [
+  `--api-key=${$.env.LUAROCKS_API_KEY}`,
+  $.env.INPUT_FORCE === 'true' ? '--force' : '',
+].filter(Boolean)
+
+await $`luarocks upload ${luarocks_upload_flags} "${rockspec.filename}"`
+
+// vim: set filetype=javascript :
