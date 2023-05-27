@@ -6,12 +6,12 @@
 
 **Rockspec Template:**
 
-Create a `<packge-name>.rockspec` file on your repository root:
+Create a `<packge-name>-dev-1.rockspec` file on your repository root:
 
 ```lua
 rockspec_format = "3.0"
 package = "dummy.lua"
-version = "dev"
+version = "dev-1"
 source = {
   url = "git+https://github.com/MunifTanjim/dummy.lua.git",
   tag = nil,
@@ -29,9 +29,6 @@ description = {
 }
 build = {
   type = "builtin",
-  modules = {
-    ["dummy"] = "dummy/init.lua",
-  },
 }
 ```
 
@@ -39,7 +36,7 @@ This will be used as a template for your package rockspec.
 
 > **Note**
 >
-> - `version` must be `"dev"`
+> - `version` must be `"dev-1"`
 > - `source.tag` must be `nil`
 
 ## Configuration
