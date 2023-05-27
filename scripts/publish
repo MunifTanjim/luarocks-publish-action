@@ -92,8 +92,8 @@ function validate_repo_rockspec(rockspec) {
     process.exit(1);
   }
 
-  if (rockspec.version !== "dev") {
-    echo("invalid rockspec, missing: version = 'dev'");
+  if (rockspec.version !== "dev-1") {
+    echo("invalid rockspec, missing: version = 'dev-1'");
     process.exit(1);
   }
 
@@ -195,7 +195,7 @@ if (!package_name) {
   package_name = $.env.GITHUB_REPOSITORY.replace(/.*\//, "");
 }
 
-const repo_rockspec = get_rockspec(`${package_name}.rockspec`);
+const repo_rockspec = get_rockspec(`${package_name}-dev-1.rockspec`);
 
 validate_repo_rockspec(repo_rockspec);
 
